@@ -152,7 +152,7 @@ def render_login_page(auth_manager: AuthManager) -> bool:
             # 모바일 친화적인 로그인 버튼
             login_button = st.form_submit_button(
                 "🚀 로그인", 
-                use_container_width=True,
+                width='stretch',
                 type="primary"
             )
             

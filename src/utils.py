@@ -11,6 +11,8 @@ import pandas as pd
 from dotenv import load_dotenv
 import tempfile
 import hashlib
+from mutagen import File
+import io
 
 
 def load_environment():
@@ -240,6 +242,8 @@ def format_analysis_for_display(analysis: Dict[str, Any]) -> str:
         formatted_text += analysis["development_analysis"]
     elif "coaching_tips" in analysis:
         formatted_text += analysis["coaching_tips"]
+    elif "sentiment_interpretation" in analysis:
+        formatted_text += analysis["sentiment_interpretation"]
     
     # 메타데이터 추가
     if "processed_at" in analysis:
@@ -321,3 +325,59 @@ def estimate_processing_time(file_size_mb: float) -> int:
     # 대략적인 추정: 1MB당 10초
     base_time = max(10, file_size_mb * 10)
     return int(base_time)
+
+
+def extract_audio_duration(uploaded_file) -> Optional[float]:
+    """
+    업로드된 오디오 파일에서 길이 정보를 빠르게 추출합니다.
+    
+    Args:
+        uploaded_file: Streamlit UploadedFile 객체
+        
+    Returns:
+        Optional[float]: 오디오 길이 (초 단위), 실패시 None
+    """
+    try:
+        # 파일 포인터를 처음으로 이동
+        uploaded_file.seek(0)
+        
+        # 파일 데이터를 메모리에서 처리
+        file_data = uploaded_file.read()
+        
+        # 파일 포인터를 다시 처음으로 리셋 (다른 함수에서 사용할 수 있도록)
+        uploaded_file.seek(0)
+        
+        # BytesIO 객체로 변환하여 mutagen에서 처리 가능하게 함
+        audio_file = io.BytesIO(file_data)
+        
+        # mutagen을 사용해 메타데이터 읽기
+        audio_info = File(audio_file)
+        
+        if audio_info is not None and hasattr(audio_info, 'info') and hasattr(audio_info.info, 'length'):
+            return float(audio_info.info.length)
+        
+        return None
+        
+    except Exception as e:
+        print(f"오디오 길이 추출 실패: {str(e)}")
+        return None
+
+
+def format_audio_duration_to_time(duration_seconds: float) -> str:
+    """
+    오디오 길이(초)를 시:분:초 형식으로 변환합니다.
+    
+    Args:
+        duration_seconds: 길이 (초)
+        
+    Returns:
+        str: HH:MM:SS 형식의 시간
+    """
+    if duration_seconds <= 0:
+        return "00:00:00"
+    
+    hours = int(duration_seconds // 3600)
+    minutes = int((duration_seconds % 3600) // 60)
+    seconds = int(duration_seconds % 60)
+    
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"

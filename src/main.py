@@ -21,11 +21,16 @@ sys.path.append(project_root)
 from src.audio_processor import AudioProcessor
 from src.ai_analyzer import AIAnalyzer
 from src.auth import AuthManager, render_login_page, render_logout_button
+from src.prompt_editor import PromptEditor
+from src.analysis_manager import AnalysisManager
+from src.metadata_form import render_metadata_form, display_metadata_summary
+from src.dashboard import render_personal_dashboard
 from src.utils import (
     load_environment, validate_audio_file, format_duration,
     calculate_speaking_balance, generate_conversation_id,
     save_analysis_result, format_analysis_for_display,
-    create_mobile_layout_config, estimate_processing_time
+    create_mobile_layout_config, estimate_processing_time,
+    extract_audio_duration, format_audio_duration_to_time
 )
 
 
@@ -44,6 +49,8 @@ class KindCoachApp:
             )
             self.audio_processor = AudioProcessor(self.env_vars["assemblyai_key"])
             self.ai_analyzer = AIAnalyzer(self.env_vars["openai_key"])
+            self.prompt_editor = PromptEditor()
+            self.analysis_manager = AnalysisManager()
         except ValueError as e:
             st.error(f"⚠️ 환경 설정 오류: {e}")
             st.info("💡 .env 파일에 API 키를 설정해주세요.")
@@ -286,8 +293,15 @@ class KindCoachApp:
                 validation = validate_audio_file(uploaded_file)
                 
                 if validation["valid"]:
-                    # 파일 정보 표시
-                    col1, col2, col3 = st.columns(3)
+                    # 오디오 길이 자동 추출
+                    audio_duration = extract_audio_duration(uploaded_file)
+                    
+                    # 파일 정보 표시 (오디오 길이 포함)
+                    if audio_duration is not None:
+                        col1, col2, col3, col4 = st.columns(4)
+                    else:
+                        col1, col2, col3 = st.columns(3)
+                    
                     with col1:
                         st.markdown(f"""
                         <div class="metric-card">
@@ -314,8 +328,29 @@ class KindCoachApp:
                         </div>
                         """, unsafe_allow_html=True)
                     
-                    # 분석 시작 버튼
-                    if st.button("🚀 분석 시작", type="primary", use_container_width=True):
+                    # 오디오 길이가 추출되면 표시
+                    if audio_duration is not None:
+                        with col4:
+                            duration_formatted = format_audio_duration_to_time(audio_duration)
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <h4>🎵 오디오 길이</h4>
+                                <p>{duration_formatted}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        st.success(f"✅ 오디오 길이가 자동으로 추출되었습니다: {duration_formatted}")
+                    else:
+                        st.warning("⚠️ 오디오 길이 자동 추출에 실패했습니다. 메타데이터에서 수동으로 입력하세요.")
+                    
+                    # 메타데이터 입력 폼 (오디오 길이 정보 전달)
+                    st.markdown("---")
+                    current_user = self.auth_manager.get_current_user()
+                    metadata = render_metadata_form(current_user, audio_duration)
+                    
+                    # 메타데이터가 입력되면 세션에 저장하고 분석 시작
+                    if metadata:
+                        st.session_state.current_metadata = metadata
                         self.process_audio_file(uploaded_file)
                 
                 else:
@@ -369,9 +404,24 @@ class KindCoachApp:
             progress_bar.progress(100)
             status_placeholder.markdown('<p class="status-success">✅ 분석 완료!</p>', unsafe_allow_html=True)
             
-            # 결과 저장
+            # 결과 저장 (새로운 AnalysisManager 사용)
             conversation_id = generate_conversation_id(transcription_result["transcript"])
             
+            # 새 분석 세션 생성 (메타데이터 포함)
+            current_user = self.auth_manager.get_current_user()
+            metadata = st.session_state.get('current_metadata', {})
+            
+            analysis_data = self.analysis_manager.create_new_analysis(
+                conversation_id, transcription_result, teacher_child_analysis,
+                metadata=metadata, username=current_user
+            )
+            
+            # 종합 분석 결과 저장
+            self.analysis_manager.update_analysis_result(
+                conversation_id, "comprehensive", ai_analysis
+            )
+            
+            # 세션에 저장 (기존 호환성 유지)
             complete_results = {
                 "conversation_id": conversation_id,
                 "transcription": transcription_result,
@@ -379,13 +429,9 @@ class KindCoachApp:
                 "ai_analysis": ai_analysis,
                 "processed_at": datetime.now().isoformat()
             }
-            
-            # 세션에 저장
             st.session_state.analysis_results = complete_results
             st.session_state.current_conversation_id = conversation_id
-            
-            # 파일로 저장
-            save_analysis_result(complete_results, conversation_id)
+            st.session_state.analysis_data = analysis_data  # 새로운 분석 데이터
             
             # 결과 표시
             st.success("🎉 분석이 성공적으로 완료되었습니다!")
@@ -425,6 +471,12 @@ class KindCoachApp:
     def render_summary_tab(self, results):
         """요약 탭 렌더링"""
         st.markdown("### 📊 분석 요약")
+        
+        # 메타데이터 표시
+        metadata = st.session_state.get('current_metadata')
+        if metadata:
+            display_metadata_summary(metadata)
+            st.markdown("---")
         
         transcription = results["transcription"]
         teacher_child = results["teacher_child_analysis"]
@@ -478,13 +530,27 @@ class KindCoachApp:
                 </div>
                 """, unsafe_allow_html=True)
         
-        # 빠른 피드백
-        if st.button("⚡ 빠른 피드백 보기", use_container_width=True):
-            quick_feedback = self.ai_analyzer.get_quick_feedback(transcription["transcript"])
-            if quick_feedback["success"]:
-                st.markdown("#### 💡 빠른 피드백")
-                analysis_content = format_analysis_for_display(quick_feedback)
-                st.markdown(f'<div class="ai-analysis-content">{analysis_content}</div>', unsafe_allow_html=True)
+        # 분석 진행 상황
+        conversation_id = results.get("conversation_id")
+        if conversation_id:
+            st.markdown("#### 📊 분석 진행 상황")
+            status = self.analysis_manager.get_analysis_status(conversation_id)
+            
+            col1, col2 = st.columns(2)
+            for i, (analysis_type, analysis_info) in enumerate(self.analysis_manager.get_analysis_types().items()):
+                is_completed = status.get(analysis_type, False)
+                
+                target_col = col1 if i % 2 == 0 else col2
+                with target_col:
+                    status_icon = "✅" if is_completed else "⏳"
+                    st.markdown(f"{status_icon} {analysis_info['icon']} {analysis_info['name']}")
+            
+            completed_count = sum(1 for completed in status.values() if completed)
+            total_count = len(status)
+            progress = completed_count / total_count if total_count > 0 else 0
+            
+            st.progress(progress)
+            st.markdown(f"**완료된 분석**: {completed_count}/{total_count}개")
     
     def render_transcript_tab(self, results):
         """전사 탭 렌더링"""
@@ -526,65 +592,211 @@ class KindCoachApp:
             """, unsafe_allow_html=True)
         
         # 전체 전사본 다운로드
-        if st.button("📥 전사본 다운로드", use_container_width=True):
+        if st.button("📥 전사본 다운로드", width='stretch'):
             transcript_text = transcription["transcript"]
             st.download_button(
                 label="💾 텍스트 파일로 다운로드",
                 data=transcript_text,
                 file_name=f"transcript_{st.session_state.current_conversation_id}.txt",
                 mime="text/plain",
-                use_container_width=True
+                width='stretch'
             )
     
     def render_ai_analysis_tab(self, results):
-        """AI 분석 탭 렌더링"""
+        """AI 분석 탭 렌더링 - 분석 유형별 독립 탭"""
         st.markdown("### 🤖 AI 코칭 분석")
         
-        ai_analysis = results["ai_analysis"]
-        
-        if not ai_analysis.get("success"):
-            st.error(f"AI 분석 실패: {ai_analysis.get('error', '알 수 없는 오류')}")
+        conversation_id = results.get("conversation_id")
+        if not conversation_id:
+            st.error("대화 ID를 찾을 수 없습니다.")
             return
         
-        # 분석 결과 표시 (다크 테마 대응)
-        analysis_content = format_analysis_for_display(ai_analysis)
-        st.markdown(f'<div class="ai-analysis-content">{analysis_content}</div>', unsafe_allow_html=True)
+        # 분석 유형별 탭 생성
+        analysis_types = self.analysis_manager.get_analysis_types()
+        tab_names = [f"{info['icon']} {info['name']}" for info in analysis_types.values()]
+        tabs = st.tabs(tab_names)
         
-        # 추가 분석 옵션
-        st.markdown("#### 🔍 추가 분석")
+        analysis_type_keys = list(analysis_types.keys())
         
-        col1, col2 = st.columns(2)
+        for i, (tab, analysis_type) in enumerate(zip(tabs, analysis_type_keys)):
+            with tab:
+                self._render_single_analysis_tab(
+                    conversation_id, analysis_type, analysis_types[analysis_type], results
+                )
+    
+    def _render_single_analysis_tab(self, conversation_id: str, analysis_type: str, 
+                                   analysis_info: dict, results: dict):
+        """개별 분석 유형 탭 렌더링"""
+        st.markdown(f"#### {analysis_info['icon']} {analysis_info['name']}")
+        st.markdown(f"*{analysis_info['description']}*")
         
-        with col1:
-            if st.button("👶 아동 발달 분석", use_container_width=True):
-                with st.spinner("아동 발달을 분석 중..."):
-                    teacher_child = results["teacher_child_analysis"]
-                    child_segments = [
-                        seg for seg in results["transcription"]["speakers"]
-                        if seg["speaker"] == teacher_child.get("child", "")
-                    ]
-                    
-                    dev_analysis = self.ai_analyzer.analyze_child_development(
-                        results["transcription"]["transcript"],
-                        child_segments
-                    )
-                    
-                    if dev_analysis["success"]:
-                        with st.expander("👶 아동 발달 분석 결과", expanded=True):
-                            analysis_content = format_analysis_for_display(dev_analysis)
-                            st.markdown(f'<div class="ai-analysis-content">{analysis_content}</div>', unsafe_allow_html=True)
+        # 분석 완료 상태 확인 (현재 사용자 정보 포함)
+        current_user = self.auth_manager.get_current_user()
+        is_completed = self.analysis_manager.is_analysis_completed(conversation_id, analysis_type, username=current_user)
+        cached_result = self.analysis_manager.get_analysis_result(conversation_id, analysis_type, username=current_user)
+        
+        # 상태 표시
+        if is_completed and cached_result:
+            st.success("✅ 분석 완료 - 저장된 결과를 표시합니다")
+        else:
+            st.info("⏳ 아직 분석되지 않았습니다")
+        
+        col1, col2 = st.columns([3, 1])
         
         with col2:
-            if st.button("💡 상황별 코칭 팁", use_container_width=True):
-                with st.spinner("코칭 팁을 생성 중..."):
-                    coaching_tips = self.ai_analyzer.get_coaching_tips(
-                        results["transcription"]["transcript"]
-                    )
+            # 분석 실행/재실행 버튼
+            if is_completed:
+                button_text = "🔄 재분석"
+                button_type = "secondary"
+            else:
+                button_text = "▶️ 분석 실행"
+                button_type = "primary"
+            
+            if st.button(button_text, key=f"analyze_{analysis_type}", 
+                        type=button_type, width='stretch'):
+                self._execute_analysis(conversation_id, analysis_type, results)
+                st.rerun()
+        
+        # 분석 결과 표시
+        if is_completed and cached_result:
+            with col1:
+                st.markdown("**분석 완료 시간:** " + 
+                          cached_result.get("processed_at", "N/A")[:19].replace("T", " "))
+            
+            # 결과 내용 표시
+            if cached_result.get("success"):
+                result_content = self._format_analysis_result(analysis_type, cached_result)
+                if result_content:
+                    st.markdown("---")
+                    st.markdown(f'<div class="ai-analysis-content">{result_content}</div>', 
+                              unsafe_allow_html=True)
+            else:
+                st.error(f"❌ 분석 실패: {cached_result.get('error', '알 수 없는 오류')}")
+        elif not is_completed:
+            st.markdown("위의 '분석 실행' 버튼을 클릭하여 분석을 시작하세요.")
+    
+    def _execute_analysis(self, conversation_id: str, analysis_type: str, results: dict):
+        """특정 분석 유형을 실행합니다"""
+        analysis_name = self.analysis_manager.get_analysis_types()[analysis_type]['name']
+        
+        with st.spinner(f"{analysis_name} 실행 중..."):
+            try:
+                st.info(f"🔄 {analysis_name}을 시작합니다...")
+                result = None
+                
+                if analysis_type == "comprehensive":
+                    # 종합 분석 (이미 완료된 상태이므로 기존 결과 사용)
+                    result = results.get("ai_analysis")
+                    if result:
+                        st.info("📋 기존 종합 분석 결과를 사용합니다.")
+                
+                elif analysis_type == "quick_feedback":
+                    st.info("⚡ 빠른 피드백을 생성하고 있습니다...")
+                    transcript = results["transcription"]["transcript"]
+                    if not transcript.strip():
+                        raise ValueError("전사본이 비어있어 분석할 수 없습니다.")
+                    result = self.ai_analyzer.get_quick_feedback(transcript)
+                
+                elif analysis_type == "child_development":
+                    st.info("👶 아동 발달 분석을 수행하고 있습니다...")
+                    teacher_child = results["teacher_child_analysis"]
                     
-                    if coaching_tips["success"]:
-                        with st.expander("💡 코칭 팁", expanded=True):
-                            analysis_content = format_analysis_for_display(coaching_tips)
-                            st.markdown(f'<div class="ai-analysis-content">{analysis_content}</div>', unsafe_allow_html=True)
+                    # 아동 화자 ID 확인 및 개선
+                    child_speaker_id = teacher_child.get("child", "")
+                    if not child_speaker_id:
+                        # 대안: 가장 적게 말한 화자를 아동으로 추정
+                        speakers = results["transcription"]["speakers"]
+                        if speakers:
+                            speaker_stats = {}
+                            for seg in speakers:
+                                speaker_id = seg["speaker"]
+                                if speaker_id not in speaker_stats:
+                                    speaker_stats[speaker_id] = {"time": 0, "words": 0}
+                                speaker_stats[speaker_id]["time"] += seg.get("end_time", 0) - seg.get("start_time", 0)
+                                speaker_stats[speaker_id]["words"] += len(seg["text"].split())
+                            
+                            # 가장 적게 말한 화자를 아동으로 추정
+                            child_speaker_id = min(speaker_stats.keys(), 
+                                                 key=lambda x: speaker_stats[x]["time"])
+                            st.info(f"🔍 화자 {child_speaker_id}를 아동으로 추정하여 분석합니다.")
+                    
+                    child_segments = [
+                        seg for seg in results["transcription"]["speakers"]
+                        if seg["speaker"] == child_speaker_id
+                    ]
+                    
+                    if not child_segments:
+                        st.warning("⚠️ 아동 발화를 찾을 수 없어 전체 대화를 기준으로 분석합니다.")
+                        child_segments = results["transcription"]["speakers"]
+                    
+                    result = self.ai_analyzer.analyze_child_development(
+                        results["transcription"]["transcript"], child_segments
+                    )
+                
+                elif analysis_type == "coaching_tips":
+                    st.info("💡 코칭 팁을 생성하고 있습니다...")
+                    # 메타데이터에서 상황 정보 가져오기
+                    metadata = st.session_state.get('current_metadata', {})
+                    situation = metadata.get('situation_type', "일반적인 교사-아동 상호작용")
+                    
+                    result = self.ai_analyzer.get_coaching_tips(
+                        results["transcription"]["transcript"], situation
+                    )
+                
+                elif analysis_type == "sentiment_interpretation":
+                    st.info("😊 감정 분석 해석을 수행하고 있습니다...")
+                    sentiment_data = results["transcription"].get("sentiment", [])
+                    if not sentiment_data:
+                        st.warning("⚠️ 감정 분석 데이터가 없어 기본 해석을 제공합니다.")
+                        sentiment_data = []
+                    
+                    duration = results['transcription'].get('audio_duration', 0)
+                    context = f"교사-아동 상호작용 ({duration}초)"
+                    result = self.ai_analyzer.interpret_sentiment(sentiment_data, context)
+                
+                # 결과 처리
+                if result and result.get("success"):
+                    st.info("💾 분석 결과를 저장하고 있습니다...")
+                    success = self.analysis_manager.update_analysis_result(
+                        conversation_id, analysis_type, result
+                    )
+                    if success:
+                        st.success(f"✅ {analysis_name}이 완료되고 저장되었습니다!")
+                        # 세션 상태 업데이트로 UI 즉시 반영
+                        if 'analysis_data' in st.session_state:
+                            # 현재 세션의 분석 데이터도 업데이트
+                            current_user = self.auth_manager.get_current_user()
+                            updated_data = self.analysis_manager.load_analysis(conversation_id, username=current_user)
+                            if updated_data:
+                                st.session_state.analysis_data = updated_data
+                    else:
+                        st.error("❌ 분석 결과 저장에 실패했습니다.")
+                elif result and not result.get("success"):
+                    error_msg = result.get("error", "알 수 없는 오류")
+                    st.error(f"❌ {analysis_name} 실행 실패: {error_msg}")
+                else:
+                    st.error(f"❌ {analysis_name}을 실행할 수 없습니다. 데이터를 확인해주세요.")
+                    
+            except Exception as e:
+                st.error(f"❌ {analysis_name} 실행 중 오류 발생: {str(e)}")
+                # 디버깅을 위한 상세 로그 (개발 환경에서만)
+                import traceback
+                st.error(f"상세 오류: {traceback.format_exc()}")
+    
+    def _format_analysis_result(self, analysis_type: str, result: dict) -> str:
+        """분석 유형에 따라 결과를 포맷팅합니다"""
+        if analysis_type == "comprehensive":
+            return format_analysis_for_display(result)
+        elif analysis_type == "quick_feedback":
+            return format_analysis_for_display(result)
+        elif analysis_type == "child_development":
+            return format_analysis_for_display(result)
+        elif analysis_type == "coaching_tips":
+            return format_analysis_for_display(result)
+        elif analysis_type == "sentiment_interpretation":
+            return format_analysis_for_display(result)
+        
+        return "결과를 표시할 수 없습니다."
     
     def render_statistics_tab(self, results):
         """통계 탭 렌더링"""
@@ -625,7 +837,7 @@ class KindCoachApp:
                 showlegend=True
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
         
         # 발화 패턴 시각화
         if len(segments) > 1:
@@ -656,7 +868,7 @@ class KindCoachApp:
                 yaxis_title="화자"
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig)
         
         # 통계 요약
         col1, col2, col3 = st.columns(3)
@@ -730,23 +942,279 @@ class KindCoachApp:
         # 헤더 렌더링
         self.render_header()
         
-        # 메인 컨테이너
-        main_container = st.container()
+        # 메인 네비게이션 탭
+        tab1, tab2, tab3, tab4 = st.tabs(["🎯 음성 분석", "📊 개인 대시보드", "📚 분석 히스토리", "🛠️ 프롬프트 관리"])
         
-        with main_container:
-            # 파일 업로드
-            uploaded_file = self.render_file_upload()
+        with tab1:
+            # 기존 메인 기능
+            main_container = st.container()
             
-            # 구분선
-            if uploaded_file or st.session_state.analysis_results:
-                st.markdown("---")
+            with main_container:
+                # 파일 업로드
+                uploaded_file = self.render_file_upload()
+                
+                # 구분선
+                if uploaded_file or st.session_state.analysis_results:
+                    st.markdown("---")
+                
+                # 분석 결과
+                self.render_analysis_results()
             
-            # 분석 결과
-            self.render_analysis_results()
+            # 사이드바 (데스크톱에서만 표시)
+            if st.session_state.get('screen_width', 1024) > 768:
+                self.render_sidebar()
         
-        # 사이드바 (데스크톱에서만 표시)
-        if st.session_state.get('screen_width', 1024) > 768:
-            self.render_sidebar()
+        with tab2:
+            # 개인 대시보드
+            current_user = self.auth_manager.get_current_user()
+            render_personal_dashboard(self.analysis_manager, current_user)
+        
+        with tab3:
+            # 분석 히스토리 페이지
+            self.render_analysis_history()
+        
+        with tab4:
+            # 프롬프트 관리 페이지
+            self.prompt_editor.render_prompt_management_page()
+
+    def render_analysis_history(self):
+        """분석 히스토리 페이지 렌더링"""
+        st.markdown("# 📚 분석 히스토리")
+        st.markdown("---")
+        
+        # 안내 메시지
+        st.info("""
+        **분석 히스토리 관리**
+        
+        과거에 수행된 모든 분석 결과를 확인하고 관리할 수 있습니다.
+        - 🔍 **검색**: 키워드로 분석 결과 검색
+        - 📄 **불러오기**: 저장된 분석 결과 다시 보기
+        - 🗑️ **삭제**: 불필요한 분석 결과 제거
+        """)
+        
+        # 고급 검색 필터
+        current_user = self.auth_manager.get_current_user()
+        
+        with st.expander("🔧 고급 검색 옵션", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                show_only_my_analyses = st.checkbox(
+                    "내 분석만 보기", 
+                    value=True,
+                    help=f"'{current_user}'의 분석 결과만 표시합니다."
+                )
+                
+                child_name_filter = st.text_input(
+                    "👶 아동명 필터",
+                    placeholder="예: 김민수",
+                    key="child_name_filter"
+                )
+            
+            with col2:
+                situation_filter = st.selectbox(
+                    "📍 상황 필터",
+                    options=["전체", "자유놀이", "집단활동", "간식시간", "정리시간", 
+                            "독서활동", "미술활동", "야외활동", "개별상담", "기타"],
+                    key="situation_filter"
+                )
+                
+                # 날짜 범위 필터
+                date_col1, date_col2 = st.columns(2)
+                with date_col1:
+                    date_from = st.date_input("📅 시작일", value=None, key="date_from")
+                with date_col2:
+                    date_to = st.date_input("📅 종료일", value=None, key="date_to")
+        
+        # 기본 검색
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            search_keyword = st.text_input(
+                "🔍 키워드 검색 (전사 내용, 아동명, 설명 등)",
+                placeholder="예: 블록놀이, 인사, 칭찬 등...",
+                key="history_search"
+            )
+        
+        with col2:
+            st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
+            if st.button("🔍 검색", width='stretch'):
+                st.rerun()
+        
+        # 분석 목록 가져오기
+        username_filter = current_user if show_only_my_analyses else None
+        
+        if search_keyword or child_name_filter or situation_filter != "전체" or date_from or date_to:
+            # 필터링된 검색
+            all_analyses = self.analysis_manager.get_all_analyses(username=username_filter)
+            
+            # 추가 필터 적용
+            filter_criteria = {}
+            if search_keyword:
+                filter_criteria['search_keyword'] = search_keyword
+            if child_name_filter:
+                filter_criteria['child_name'] = child_name_filter
+            if situation_filter != "전체":
+                filter_criteria['situation_type'] = situation_filter
+            if date_from:
+                filter_criteria['date_from'] = date_from.isoformat()
+            if date_to:
+                filter_criteria['date_to'] = date_to.isoformat()
+            
+            # 메타데이터 기반 필터링 적용
+            from src.metadata_form import filter_analyses_by_metadata
+            analyses = filter_analyses_by_metadata(all_analyses, filter_criteria)
+            
+            # 키워드 검색도 적용
+            if search_keyword:
+                analyses = self.analysis_manager.search_analyses(search_keyword)
+                if username_filter:
+                    analyses = [a for a in analyses if a.get('username') == username_filter]
+                analyses = filter_analyses_by_metadata(analyses, filter_criteria)
+            
+            st.markdown(f"### 🔍 필터링된 결과 ({len(analyses)}개)")
+        else:
+            analyses = self.analysis_manager.get_all_analyses(username=username_filter)
+            st.markdown(f"### 📋 분석 목록 ({len(analyses)}개)")
+        
+        if not analyses:
+            if search_keyword:
+                st.warning("🔍 검색 결과가 없습니다. 다른 키워드로 검색해보세요.")
+            else:
+                st.info("📝 아직 저장된 분석 결과가 없습니다. 음성 분석을 먼저 실행해주세요.")
+            return
+        
+        # 분석 목록 표시
+        for i, analysis in enumerate(analyses):
+            metadata = analysis.get('metadata', {})
+            child_name = metadata.get('child_name', '알 수 없음')
+            situation = metadata.get('situation_type', '알 수 없음')
+            
+            # 제목에 메타데이터 정보 포함
+            title = f"👶 {child_name} - {situation} ({analysis.get('created_at', 'N/A')[:19].replace('T', ' ')})"
+            
+            with st.expander(title, expanded=False):
+                # 메타데이터 요약 표시
+                if metadata:
+                    from src.metadata_form import display_metadata_summary
+                    display_metadata_summary(metadata)
+                    st.markdown("---")
+                
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    st.markdown("**전사 미리보기:**")
+                    st.markdown(f"_{analysis.get('transcript_preview', '미리보기 없음')}_")
+                    
+                    # 분석 완료 상태
+                    completed = analysis.get('completed_analyses', 0)
+                    total = analysis.get('total_analyses', 5)
+                    progress = completed / total if total > 0 else 0
+                    
+                    st.markdown(f"**분석 진행도**: {completed}/{total}개 완료")
+                    st.progress(progress)
+                
+                with col2:
+                    st.markdown("**생성일시:**")
+                    st.markdown(analysis.get('created_at', 'N/A')[:19].replace('T', ' '))
+                    
+                    st.markdown("**마지막 수정:**")
+                    st.markdown(analysis.get('last_updated', 'N/A')[:19].replace('T', ' '))
+                
+                with col3:
+                    # 불러오기 버튼
+                    if st.button(
+                        "📂 불러오기", 
+                        key=f"load_{analysis['conversation_id']}",
+                        width='stretch',
+                        type="primary"
+                    ):
+                        self._load_analysis_from_history(analysis['conversation_id'])
+                    
+                    # 삭제 버튼 - 바로 실행
+                    if st.button(
+                        "🗑️ 삭제", 
+                        key=f"delete_{analysis['conversation_id']}",
+                        width='stretch',
+                        type="secondary"
+                    ):
+                        # 즉시 삭제 실행
+                        current_user = self.auth_manager.get_current_user()
+                        success = self.analysis_manager.delete_analysis(analysis['conversation_id'], username=current_user)
+                        
+                        if success:
+                            metadata = analysis.get('metadata', {})
+                            child_name = metadata.get('child_name', '알 수 없음')
+                            st.success(f"✅ **{child_name}**의 분석이 삭제되었습니다!")
+                            
+                            # 현재 세션 클리어 (삭제된 분석과 관련된 경우)
+                            if (st.session_state.get('current_conversation_id') == analysis['conversation_id'] or
+                                st.session_state.get('analysis_results', {}).get('conversation_id') == analysis['conversation_id']):
+                                st.session_state.analysis_results = {}
+                                st.session_state.current_conversation_id = None
+                                if 'analysis_data' in st.session_state:
+                                    del st.session_state.analysis_data
+                                if 'current_metadata' in st.session_state:
+                                    del st.session_state.current_metadata
+                            
+                            # 즉시 페이지 새로고침
+                            st.rerun()
+                        else:
+                            st.error("❌ 삭제 실패: 파일을 찾을 수 없습니다.")
+                
+                # 분석 상태 상세 표시
+                status = analysis.get('analysis_status', {})
+                if status:
+                    st.markdown("**분석 상태 상세:**")
+                    status_cols = st.columns(len(status))
+                    
+                    analysis_types = self.analysis_manager.get_analysis_types()
+                    for j, (analysis_type, is_completed) in enumerate(status.items()):
+                        with status_cols[j]:
+                            analysis_info = analysis_types.get(analysis_type, {})
+                            icon = analysis_info.get('icon', '📋')
+                            name = analysis_info.get('name', analysis_type)
+                            status_icon = "✅" if is_completed else "⏳"
+                            st.markdown(f"{status_icon} {icon}")
+                            st.caption(name)
+    
+    def _load_analysis_from_history(self, conversation_id: str):
+        """히스토리에서 분석 결과를 불러옵니다"""
+        try:
+            # 분석 데이터 로드
+            analysis_data = self.analysis_manager.load_analysis(conversation_id)
+            
+            if not analysis_data:
+                st.error("❌ 분석 데이터를 찾을 수 없습니다.")
+                return
+            
+            # 세션 상태에 로드
+            transcription = analysis_data.get("transcription", {})
+            teacher_child_analysis = analysis_data.get("teacher_child_analysis", {})
+            
+            # 종합 분석 결과 가져오기 (기존 호환성)
+            comprehensive_analysis = analysis_data.get("analyses", {}).get("comprehensive")
+            
+            if comprehensive_analysis:
+                complete_results = {
+                    "conversation_id": conversation_id,
+                    "transcription": transcription,
+                    "teacher_child_analysis": teacher_child_analysis,
+                    "ai_analysis": comprehensive_analysis,
+                    "processed_at": analysis_data.get("created_at")
+                }
+                
+                st.session_state.analysis_results = complete_results
+                st.session_state.current_conversation_id = conversation_id
+                st.session_state.analysis_data = analysis_data
+                
+                st.success(f"✅ 분석 결과 '{conversation_id}'를 불러왔습니다!")
+                st.info("💡 '🎯 음성 분석' 탭으로 이동하여 결과를 확인하세요.")
+            else:
+                st.warning("⚠️ 이 분석에는 종합 분석 결과가 없습니다.")
+            
+        except Exception as e:
+            st.error(f"❌ 분석 결과 로드 실패: {str(e)}")
+    
 
 
 def main():

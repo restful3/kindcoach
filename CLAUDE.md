@@ -15,7 +15,21 @@ KindCoach is an AI-powered coaching platform for kindergarten teachers, designed
 
 ## Development Commands
 
-### Environment Setup
+### Quick Start (Recommended)
+```bash
+# One-click setup and run
+./run.sh
+```
+
+The `run.sh` script provides automated deployment with:
+- **Port Management**: Automatically kills any processes using port 8501
+- **Environment Setup**: Creates `.venv` virtual environment if it doesn't exist  
+- **Dependency Installation**: Installs/updates packages from `requirements.txt`
+- **Application Launch**: Activates environment and starts Streamlit server
+
+This is the **fastest way to get KindCoach running** from a fresh clone.
+
+### Manual Environment Setup
 ```bash
 # Create and activate virtual environment
 python -m venv .venv

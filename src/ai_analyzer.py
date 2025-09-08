@@ -10,13 +10,7 @@ import json
 from datetime import datetime
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from config.prompts import (
-    CONVERSATION_ANALYSIS_PROMPT,
-    QUICK_FEEDBACK_PROMPT,
-    CHILD_DEVELOPMENT_ANALYSIS_PROMPT,
-    COACHING_TIPS_PROMPT,
-    SENTIMENT_INTERPRETATION_PROMPT
-)
+from src.prompt_manager import PromptManager
 
 
 class AIAnalyzer:
@@ -28,6 +22,7 @@ class AIAnalyzer:
         
         self.client = openai.OpenAI(api_key=self.api_key)
         self.model = "gpt-4o-mini"
+        self.prompt_manager = PromptManager()
     
     def analyze_conversation(
         self, 
@@ -63,7 +58,11 @@ class AIAnalyzer:
             sentiment_analysis = self._format_sentiment_data(sentiment_data)
             
             # 프롬프트 구성
-            prompt = CONVERSATION_ANALYSIS_PROMPT.format(
+            prompt_template = self.prompt_manager.get_prompt("conversation_analysis")
+            if not prompt_template:
+                raise ValueError("종합 분석 프롬프트를 찾을 수 없습니다.")
+            
+            prompt = prompt_template.format(
                 transcript=transcript,
                 teacher_info=teacher_info,
                 child_info=child_info,
@@ -96,6 +95,12 @@ class AIAnalyzer:
                 }
             }
             
+        except openai.APIError as e:
+            return {
+                "success": False,
+                "error": f"OpenAI API 호출 실패 (종합 분석): {str(e)}",
+                "analysis": None
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -114,7 +119,11 @@ class AIAnalyzer:
             Dict: 간단한 피드백 결과
         """
         try:
-            prompt = QUICK_FEEDBACK_PROMPT.format(transcript=transcript)
+            prompt_template = self.prompt_manager.get_prompt("quick_feedback")
+            if not prompt_template:
+                raise ValueError("빠른 피드백 프롬프트를 찾을 수 없습니다.")
+            
+            prompt = prompt_template.format(transcript=transcript)
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -135,6 +144,12 @@ class AIAnalyzer:
                 "processed_at": datetime.now().isoformat()
             }
             
+        except openai.APIError as e:
+            return {
+                "success": False,
+                "error": f"OpenAI API 호출 실패 (빠른 피드백): {str(e)}",
+                "feedback": None
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -164,7 +179,11 @@ class AIAnalyzer:
                 for seg in child_segments
             ])
             
-            prompt = CHILD_DEVELOPMENT_ANALYSIS_PROMPT.format(
+            prompt_template = self.prompt_manager.get_prompt("child_development")
+            if not prompt_template:
+                raise ValueError("아동 발달 분석 프롬프트를 찾을 수 없습니다.")
+            
+            prompt = prompt_template.format(
                 transcript=transcript,
                 child_utterances=child_utterances
             )
@@ -188,6 +207,12 @@ class AIAnalyzer:
                 "processed_at": datetime.now().isoformat()
             }
             
+        except openai.APIError as e:
+            return {
+                "success": False,
+                "error": f"OpenAI API 호출 실패 (발달 분석): {str(e)}",
+                "development_analysis": None
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -207,7 +232,11 @@ class AIAnalyzer:
             Dict: 코칭 팁 결과
         """
         try:
-            prompt = COACHING_TIPS_PROMPT.format(
+            prompt_template = self.prompt_manager.get_prompt("coaching_tips")
+            if not prompt_template:
+                raise ValueError("코칭 팁 프롬프트를 찾을 수 없습니다.")
+            
+            prompt = prompt_template.format(
                 situation=situation,
                 transcript=transcript
             )
@@ -231,6 +260,12 @@ class AIAnalyzer:
                 "processed_at": datetime.now().isoformat()
             }
             
+        except openai.APIError as e:
+            return {
+                "success": False,
+                "error": f"OpenAI API 호출 실패 (코칭 팁): {str(e)}",
+                "coaching_tips": None
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -256,7 +291,11 @@ class AIAnalyzer:
         try:
             sentiment_formatted = self._format_sentiment_data(sentiment_data)
             
-            prompt = SENTIMENT_INTERPRETATION_PROMPT.format(
+            prompt_template = self.prompt_manager.get_prompt("sentiment_interpretation")
+            if not prompt_template:
+                raise ValueError("감정 해석 프롬프트를 찾을 수 없습니다.")
+            
+            prompt = prompt_template.format(
                 sentiment_data=sentiment_formatted,
                 context=context
             )
@@ -279,6 +318,12 @@ class AIAnalyzer:
                 "processed_at": datetime.now().isoformat()
             }
             
+        except openai.APIError as e:
+            return {
+                "success": False,
+                "error": f"OpenAI API 호출 실패 (감정 해석): {str(e)}",
+                "sentiment_interpretation": None
+            }
         except Exception as e:
             return {
                 "success": False,
