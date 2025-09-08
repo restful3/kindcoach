@@ -20,6 +20,7 @@ sys.path.append(project_root)
 
 from src.audio_processor import AudioProcessor
 from src.ai_analyzer import AIAnalyzer
+from src.auth import AuthManager, render_login_page, render_logout_button
 from src.utils import (
     load_environment, validate_audio_file, format_duration,
     calculate_speaking_balance, generate_conversation_id,
@@ -37,6 +38,10 @@ class KindCoachApp:
         
         try:
             self.env_vars = load_environment()
+            self.auth_manager = AuthManager(
+                self.env_vars["admin_username"], 
+                self.env_vars["admin_password"]
+            )
             self.audio_processor = AudioProcessor(self.env_vars["assemblyai_key"])
             self.ai_analyzer = AIAnalyzer(self.env_vars["openai_key"])
         except ValueError as e:
@@ -710,6 +715,18 @@ class KindCoachApp:
     
     def run(self):
         """메인 애플리케이션 실행"""
+        # 인증 확인
+        if not self.auth_manager.is_authenticated():
+            # 로그인 페이지 표시
+            render_login_page(self.auth_manager)
+            return
+        
+        # 세션 활동 시간 업데이트
+        self.auth_manager.update_session()
+        
+        # 로그아웃 버튼 표시
+        render_logout_button(self.auth_manager)
+        
         # 헤더 렌더링
         self.render_header()
         

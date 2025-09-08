@@ -1,3 +1,7 @@
 ASSEMBLYAI_API_KEY=your_key_here
 OPENAI_API_KEY=your_key_here
 STREAMLIT_SERVER_PORT=8501
+
+# Authentication settings
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your_secure_password_here

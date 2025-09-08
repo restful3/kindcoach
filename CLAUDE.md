@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 KindCoach is an AI-powered coaching platform for kindergarten teachers, designed to help them communicate more effectively with children through AI analysis of teacher-child interactions.
 
 **Tech Stack:**
-- **Frontend:** Streamlit for web interface
+- **Frontend:** Streamlit for web interface (mobile-optimized)
 - **AI Services:** AssemblyAI for Korean speech recognition + speaker diarization, OpenAI GPT-4o-mini for conversation analysis and coaching recommendations
 - **Backend:** Python 3.10+
+- **Data:** JSON file-based result persistence in `data/analysis_results/`
 - **Infrastructure:** Python virtual environment, Git version control
 
 ## Development Commands
@@ -27,8 +28,11 @@ pip install -r requirements.txt
 
 ### Running the Application
 ```bash
-# Start Streamlit app
+# Start Streamlit app (default port 8501)
 streamlit run src/main.py
+
+# Run on custom port
+STREAMLIT_SERVER_PORT=8502 streamlit run src/main.py
 ```
 
 ### Environment Variables
@@ -36,70 +40,108 @@ Copy `env_example` to `.env` and configure:
 - `ASSEMBLYAI_API_KEY`: AssemblyAI API key for speech recognition and speaker diarization
 - `OPENAI_API_KEY`: OpenAI API key for conversation analysis using GPT-4o-mini
 - `STREAMLIT_SERVER_PORT`: Port for Streamlit server (default: 8501)
+- `ADMIN_USERNAME`: Admin login username (default: admin)
+- `ADMIN_PASSWORD`: Admin login password for authentication
 
 ### Testing and Verification
 ```bash
-# Test that all modules can be imported
-source .venv/bin/activate
+# Test module imports
 python -c "import src.main; print('All modules imported successfully')"
 
-# Run the application
-streamlit run src/main.py
+# Run end-to-end test with sample audio
+python test_audio.py
 
 # The app will be available at http://localhost:8501
 ```
 
 ## Architecture
 
-The project follows a modular structure designed around real-time audio processing and AI analysis:
+### Core Application Structure
+The application follows a single-page Streamlit architecture with modular backend services:
 
-**Implemented Module Structure:**
-- `src/main.py`: Streamlit main application with mobile-optimized UI
-- `src/audio_processor.py`: AssemblyAI integration for speech recognition and speaker diarization
-- `src/ai_analyzer.py`: OpenAI GPT-4o-mini integration for conversation analysis and coaching
-- `src/utils.py`: Common utility functions for file handling, data processing, and mobile layout
-- `config/prompts.py`: Comprehensive AI prompt templates for different analysis types
+- `KindCoachApp` class in `src/main.py` orchestrates the entire user experience
+- Session state management handles multi-step workflows and caching
+- Mobile-first responsive UI using custom CSS and Streamlit columns
+- File upload validation with 50MB limit and format checking
 
-**Implemented Workflow:**
-1. **File Upload**: Mobile-optimized drag-and-drop interface with file validation
-2. **Audio Processing**: AssemblyAI transcription with Korean language support and speaker diarization
-3. **Speaker Analysis**: Automatic teacher-child role detection based on speaking patterns
-4. **AI Analysis**: Multiple analysis types using OpenAI GPT-4o-mini:
-   - Comprehensive coaching analysis (conversation quality, strengths, improvement areas)
-   - Quick feedback for immediate insights
-   - Child development analysis from developmental psychology perspective
-   - Situation-specific coaching tips
-   - Sentiment analysis interpretation
-5. **Results Display**: Tabbed interface with:
-   - Summary with key metrics and speaker statistics
-   - Full transcript with speaker labels and timestamps
-   - AI analysis with expandable sections
-   - Interactive charts and statistical visualizations
-6. **Data Persistence**: Automatic saving of analysis results as JSON files
+### Key Modules
+- **`src/audio_processor.py`**: AssemblyAI wrapper for speech-to-text and speaker diarization
+- **`src/ai_analyzer.py`**: OpenAI client for multiple analysis types (comprehensive, quick feedback, child development, coaching tips)  
+- **`src/utils.py`**: Shared utilities for environment loading, file validation, data formatting, and UI helpers
+- **`src/auth.py`**: Authentication system with bcrypt password hashing and session management
+- **`config/prompts.py`**: Centralized AI prompt templates for consistent analysis quality
 
-## Project Status
+### Data Flow
+1. **Authentication** → Login validation with bcrypt → Session state management → Auto-logout after 30 mins
+2. **File Upload** → Validation (format, size) → Store in session state
+3. **Audio Processing** → AssemblyAI transcription → Speaker diarization → Teacher/child role detection
+4. **AI Analysis** → Multiple OpenAI calls with specialized prompts → Structured JSON responses  
+5. **Results Display** → Tabbed interface with summary, transcript, analysis, and visualizations
+6. **Persistence** → Analysis results auto-saved to `data/analysis_results/` as JSON with unique conversation IDs
 
-✅ **FULLY IMPLEMENTED** - The KindCoach platform is complete and functional:
+### Speaker Analysis Logic
+- Identifies teacher vs child based on speaking time ratios, word counts, and conversation patterns
+- Calculates balance metrics (teacher dominance, child participation)
+- Provides statistical breakdowns for coaching insights
 
-### Implemented Features
-1. ✅ Complete project structure with all core modules
-2. ✅ Mobile-optimized Streamlit web interface
-3. ✅ AssemblyAI integration for Korean speech recognition and speaker diarization
-4. ✅ OpenAI GPT-4o-mini integration for comprehensive conversation analysis
-5. ✅ Teacher-child interaction analysis and coaching feedback
-6. ✅ Multiple analysis types: comprehensive, quick feedback, child development, coaching tips
-7. ✅ Audio file upload with validation (50MB limit, multiple formats)
-8. ✅ Results visualization with interactive charts and statistics
-9. ✅ Session state management and result persistence
-10. ✅ Environment configuration with API key validation
+### Analysis Types Architecture
+- **Comprehensive**: Full 10-point scoring system with detailed feedback
+- **Quick Feedback**: Immediate insights for rapid review
+- **Child Development**: Developmental psychology perspective  
+- **Coaching Tips**: Situational improvement recommendations
 
-### Key Implementation Notes
-- All modules are functional and tested
-- Korean language support throughout
-- Comprehensive error handling for API integrations
-- Mobile-first responsive design
-- File-based result storage system
-- Speaker balance analysis and conversation insights
+## Development Notes
 
-### Usage
-The application is ready for production use. Users can upload teacher-child conversation audio files and receive detailed AI-powered coaching feedback.
+### Audio File Handling
+- Supported formats: WAV, MP3, M4A, FLAC, OGG, WMA, AAC
+- Maximum file size: 50MB
+- File validation occurs before processing to prevent API errors
+- Sample audio file available at `data/sample_audio/sample_audio.m4a` for testing
+
+### Session State Management
+Session state keys used throughout the application:
+- `authenticated`: Boolean flag for login status
+- `login_time`: Timestamp for session timeout tracking
+- `uploaded_file`: Current audio file
+- `transcription_result`: AssemblyAI response data  
+- `analysis_results`: All AI analysis responses
+- `conversation_id`: Unique identifier for saving results
+- `show_additional_analysis`: UI state for expanded analysis options
+
+### Error Handling Patterns
+- API failures gracefully handled with user-friendly error messages
+- Environment variable validation occurs at startup
+- File processing errors display specific guidance (file format, size limits)
+- Network timeouts and rate limits handled with retry logic
+
+### Mobile Optimization
+- Custom CSS for touch-friendly interfaces
+- Responsive column layouts that stack on mobile
+- Optimized font sizes and button spacing
+- Progress indicators for long-running operations
+
+### Production Readiness
+- Environment variables required for API keys and authentication
+- Results automatically persist to local JSON files with unique IDs
+- No database dependencies - uses file system for simplicity
+- Secure authentication with bcrypt password hashing
+- Session timeout for security (30 minutes)
+- Ready for deployment with proper API key and admin credential configuration
+
+## Security Considerations
+
+### Authentication System
+- Admin login required to access application
+- Passwords hashed using bcrypt with salt
+- Session timeout after 30 minutes of inactivity
+- Session state stored securely in Streamlit's session management
+
+### API Key Management
+- All API keys stored in environment variables, never in code
+- Environment validation at application startup
+- Clear error messages for missing configurations without exposing sensitive data
+
+### File Security
+- Uploaded files validated for type and size before processing
+- Temporary file handling with proper cleanup
+- Analysis results stored locally with unique identifiers to prevent conflicts

@@ -17,7 +17,7 @@ def load_environment():
     """환경 변수를 로드하고 검증합니다."""
     load_dotenv()
     
-    required_vars = ["ASSEMBLYAI_API_KEY", "OPENAI_API_KEY"]
+    required_vars = ["ASSEMBLYAI_API_KEY", "OPENAI_API_KEY", "ADMIN_USERNAME", "ADMIN_PASSWORD"]
     missing_vars = []
     
     for var in required_vars:
@@ -30,7 +30,9 @@ def load_environment():
     return {
         "assemblyai_key": os.getenv("ASSEMBLYAI_API_KEY"),
         "openai_key": os.getenv("OPENAI_API_KEY"),
-        "streamlit_port": os.getenv("STREAMLIT_SERVER_PORT", "8501")
+        "streamlit_port": os.getenv("STREAMLIT_SERVER_PORT", "8501"),
+        "admin_username": os.getenv("ADMIN_USERNAME"),
+        "admin_password": os.getenv("ADMIN_PASSWORD")
     }
 
 
