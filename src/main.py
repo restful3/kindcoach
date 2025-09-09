@@ -18,6 +18,11 @@ current_dir = os.path.dirname(__file__)
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
+from src.logging_config import get_logger, log_performance
+
+# 로거 설정
+logger = get_logger(__name__)
+
 from src.audio_processor import AudioProcessor
 from src.ai_analyzer import AIAnalyzer
 from src.auth import AuthManager, render_login_page, render_logout_button
@@ -37,23 +42,51 @@ from src.utils import (
 class KindCoachApp:
     def __init__(self):
         """KindCoach 애플리케이션 초기화"""
+        logger.info("KindCoachApp 초기화 시작")
+        
         self.setup_page_config()
         self.load_custom_css()
         self.initialize_session_state()
         
         try:
+            logger.info("환경 변수 로드 중...")
             self.env_vars = load_environment()
+            logger.info("환경 변수 로드 완료")
+            
+            logger.info("인증 관리자 초기화 중...")
             self.auth_manager = AuthManager(
                 self.env_vars["admin_username"], 
                 self.env_vars["admin_password"]
             )
+            logger.info("인증 관리자 초기화 완료")
+            
+            logger.info("오디오 프로세서 초기화 중...")
             self.audio_processor = AudioProcessor(self.env_vars["assemblyai_key"])
+            logger.info("오디오 프로세서 초기화 완료")
+            
+            logger.info("AI 분석기 초기화 중...")
             self.ai_analyzer = AIAnalyzer(self.env_vars["openai_key"])
+            logger.info("AI 분석기 초기화 완료")
+            
+            logger.info("프롬프트 에디터 초기화 중...")
             self.prompt_editor = PromptEditor()
+            logger.info("프롬프트 에디터 초기화 완료")
+            
+            logger.info("분석 관리자 초기화 중...")
             self.analysis_manager = AnalysisManager()
+            logger.info("분석 관리자 초기화 완료")
+            
+            logger.info("KindCoachApp 초기화 완료")
+            
         except ValueError as e:
+            logger.error(f"환경 설정 오류: {e}")
             st.error(f"⚠️ 환경 설정 오류: {e}")
             st.info("💡 .env 파일에 API 키를 설정해주세요.")
+            st.stop()
+        except Exception as e:
+            logger.error(f"KindCoachApp 초기화 실패: {str(e)}")
+            logger.exception("상세 오류 정보:")
+            st.error(f"⚠️ 애플리케이션 초기화 실패: {e}")
             st.stop()
     
     def setup_page_config(self):
@@ -360,12 +393,16 @@ class KindCoachApp:
     
     def process_audio_file(self, uploaded_file):
         """오디오 파일 처리 및 분석"""
+        logger.info("오디오 파일 처리 시작")
+        logger.info(f"파일명: {uploaded_file.name}, 크기: {uploaded_file.size} bytes")
+        
         # 진행 상황 표시
         progress_bar = st.progress(0)
         status_placeholder = st.empty()
         
         try:
             # 1단계: 음성 전사
+            logger.info("1단계: 음성 전사 시작")
             status_placeholder.markdown('<p class="status-processing">🎙️ 음성을 텍스트로 변환 중...</p>', unsafe_allow_html=True)
             progress_bar.progress(20)
             
@@ -374,24 +411,30 @@ class KindCoachApp:
             transcription_result = self.audio_processor.transcribe_audio(uploaded_file)
             
             if not transcription_result["success"]:
+                logger.error(f"음성 전사 실패: {transcription_result['error']}")
                 st.error(f"음성 전사 실패: {transcription_result['error']}")
                 return
             
+            logger.info("1단계: 음성 전사 완료")
             progress_bar.progress(60)
             
             # 2단계: 교사-아동 대화 분석
+            logger.info("2단계: 교사-아동 대화 분석 시작")
             status_placeholder.markdown('<p class="status-processing">👥 화자 구분 및 역할 분석 중...</p>', unsafe_allow_html=True)
             
             speaker_segments = transcription_result["speakers"]
             teacher_child_analysis = self.audio_processor.is_teacher_child_conversation(speaker_segments)
             
             if not teacher_child_analysis["is_teacher_child"]:
+                logger.warning(f"교사-아동 대화가 아님: {teacher_child_analysis['reason']}")
                 st.warning(f"⚠️ {teacher_child_analysis['reason']}")
                 return
             
+            logger.info("2단계: 교사-아동 대화 분석 완료")
             progress_bar.progress(80)
             
             # 3단계: AI 분석
+            logger.info("3단계: AI 분석 시작")
             status_placeholder.markdown('<p class="status-processing">🤖 AI가 대화를 분석하고 코칭 피드백을 생성 중...</p>', unsafe_allow_html=True)
             
             ai_analysis = self.ai_analyzer.analyze_conversation(
@@ -401,25 +444,50 @@ class KindCoachApp:
                 transcription_result.get("sentiment", [])
             )
             
-            progress_bar.progress(100)
-            status_placeholder.markdown('<p class="status-success">✅ 분석 완료!</p>', unsafe_allow_html=True)
+            if not ai_analysis.get("success"):
+                logger.error(f"AI 분석 실패: {ai_analysis.get('error', '알 수 없는 오류')}")
+                st.error(f"AI 분석 실패: {ai_analysis.get('error', '알 수 없는 오류')}")
+                return
+            
+            logger.info("3단계: AI 분석 완료")
+            progress_bar.progress(80)
+            status_placeholder.markdown('<p class="status-processing">🔄 추가 분석들을 자동으로 실행 중...</p>', unsafe_allow_html=True)
             
             # 결과 저장 (새로운 AnalysisManager 사용)
+            logger.info("분석 결과 저장 시작")
             conversation_id = generate_conversation_id(transcription_result["transcript"])
+            logger.info(f"대화 ID 생성: {conversation_id}")
             
             # 새 분석 세션 생성 (메타데이터 포함)
             current_user = self.auth_manager.get_current_user()
             metadata = st.session_state.get('current_metadata', {})
+            logger.info(f"현재 사용자: {current_user}")
             
             analysis_data = self.analysis_manager.create_new_analysis(
                 conversation_id, transcription_result, teacher_child_analysis,
                 metadata=metadata, username=current_user
             )
             
+            if analysis_data is None:
+                logger.error("분석 세션 생성 실패")
+                st.error("❌ 분석 세션 생성에 실패했습니다. 다시 시도해주세요.")
+                return
+            
+            logger.info("새 분석 세션 생성 완료")
+            
             # 종합 분석 결과 저장
             self.analysis_manager.update_analysis_result(
-                conversation_id, "comprehensive", ai_analysis
+                conversation_id, "comprehensive", ai_analysis, current_user
             )
+            logger.info("종합 분석 결과 저장 완료")
+            
+            # 추가 분석들 자동 실행
+            logger.info("추가 분석들 자동 실행 시작")
+            self._execute_additional_analyses(conversation_id, transcription_result, speaker_segments, teacher_child_analysis, current_user)
+            logger.info("추가 분석들 자동 실행 완료")
+            
+            progress_bar.progress(100)
+            status_placeholder.markdown('<p class="status-success">✅ 모든 분석이 완료되었습니다!</p>', unsafe_allow_html=True)
             
             # 세션에 저장 (기존 호환성 유지)
             complete_results = {
@@ -433,14 +501,20 @@ class KindCoachApp:
             st.session_state.current_conversation_id = conversation_id
             st.session_state.analysis_data = analysis_data  # 새로운 분석 데이터
             
+            logger.info("세션 상태 업데이트 완료")
+            
             # 결과 표시
-            st.success("🎉 분석이 성공적으로 완료되었습니다!")
+            st.success("🎉 모든 AI 분석이 성공적으로 완료되었습니다!")
             
             # 진행 바와 상태 메시지 제거
             progress_bar.empty()
             status_placeholder.empty()
             
+            logger.info("오디오 파일 처리 완료")
+            
         except Exception as e:
+            logger.error(f"처리 중 오류 발생: {str(e)}")
+            logger.exception("상세 오류 정보:")
             st.error(f"처리 중 오류 발생: {str(e)}")
             progress_bar.empty()
             status_placeholder.empty()
@@ -624,6 +698,7 @@ class KindCoachApp:
                     conversation_id, analysis_type, analysis_types[analysis_type], results
                 )
     
+    
     def _render_single_analysis_tab(self, conversation_id: str, analysis_type: str, 
                                    analysis_info: dict, results: dict):
         """개별 분석 유형 탭 렌더링"""
@@ -641,27 +716,10 @@ class KindCoachApp:
         else:
             st.info("⏳ 아직 분석되지 않았습니다")
         
-        col1, col2 = st.columns([3, 1])
-        
-        with col2:
-            # 분석 실행/재실행 버튼
-            if is_completed:
-                button_text = "🔄 재분석"
-                button_type = "secondary"
-            else:
-                button_text = "▶️ 분석 실행"
-                button_type = "primary"
-            
-            if st.button(button_text, key=f"analyze_{analysis_type}", 
-                        type=button_type, width='stretch'):
-                self._execute_analysis(conversation_id, analysis_type, results)
-                st.rerun()
-        
         # 분석 결과 표시
         if is_completed and cached_result:
-            with col1:
-                st.markdown("**분석 완료 시간:** " + 
-                          cached_result.get("processed_at", "N/A")[:19].replace("T", " "))
+            st.markdown("**분석 완료 시간:** " + 
+                      cached_result.get("processed_at", "N/A")[:19].replace("T", " "))
             
             # 결과 내용 표시
             if cached_result.get("success"):
@@ -673,8 +731,88 @@ class KindCoachApp:
             else:
                 st.error(f"❌ 분석 실패: {cached_result.get('error', '알 수 없는 오류')}")
         elif not is_completed:
-            st.markdown("위의 '분석 실행' 버튼을 클릭하여 분석을 시작하세요.")
+            st.info("⏳ 분석이 진행 중입니다. 잠시만 기다려주세요...")
     
+    
+    def _execute_additional_analyses(self, conversation_id: str, transcription_result: dict, 
+                                   speaker_segments: list, teacher_child_analysis: dict, username: str):
+        """추가 분석들을 자동으로 실행합니다"""
+        logger.info("추가 분석들 자동 실행 시작")
+        
+        # 빠른 피드백 분석
+        try:
+            logger.info("빠른 피드백 분석 시작")
+            quick_feedback = self.ai_analyzer.get_quick_feedback(transcription_result["transcript"])
+            if quick_feedback.get("success"):
+                self.analysis_manager.update_analysis_result(conversation_id, "quick_feedback", quick_feedback, username)
+                logger.info("빠른 피드백 분석 완료")
+            else:
+                logger.error(f"빠른 피드백 분석 실패: {quick_feedback.get('error')}")
+        except Exception as e:
+            logger.error(f"빠른 피드백 분석 중 오류: {str(e)}")
+        
+        # 아동 발달 분석
+        try:
+            logger.info("아동 발달 분석 시작")
+            # 교사-아동 분석 결과에서 아동 통계 정보 사용
+            child_stats = teacher_child_analysis.get("child_stats", {})
+            if child_stats and child_stats.get("total_utterances", 0) > 0:
+                # 화자 구간에서 아동으로 추정되는 구간 찾기 (더 유연한 방법)
+                child_segments = []
+                for seg in speaker_segments:
+                    speaker = seg.get("speaker", "")
+                    # 화자 B가 아동일 가능성이 높다고 가정 (일반적으로 교사가 먼저 말함)
+                    if "B" in speaker or "아동" in speaker or "child" in speaker.lower():
+                        child_segments.append(seg)
+                
+                # 아동 구간이 없으면 전체 전사본으로 분석
+                if not child_segments:
+                    logger.info("아동 구간을 찾을 수 없어 전체 전사본으로 발달 분석을 진행합니다")
+                    child_segments = speaker_segments  # 전체 구간 사용
+                
+                child_development = self.ai_analyzer.analyze_child_development(
+                    transcription_result["transcript"], child_segments
+                )
+                if child_development.get("success"):
+                    self.analysis_manager.update_analysis_result(conversation_id, "child_development", child_development, username)
+                    logger.info("아동 발달 분석 완료")
+                else:
+                    logger.error(f"아동 발달 분석 실패: {child_development.get('error')}")
+            else:
+                logger.warning("아동 발화 통계가 없어 아동 발달 분석을 건너뜁니다")
+        except Exception as e:
+            logger.error(f"아동 발달 분석 중 오류: {str(e)}")
+        
+        # 코칭 팁 분석
+        try:
+            logger.info("코칭 팁 분석 시작")
+            coaching_tips = self.ai_analyzer.get_coaching_tips(
+                transcription_result["transcript"], "교사-아동 상호작용 상황"
+            )
+            if coaching_tips.get("success"):
+                self.analysis_manager.update_analysis_result(conversation_id, "coaching_tips", coaching_tips, username)
+                logger.info("코칭 팁 분석 완료")
+            else:
+                logger.error(f"코칭 팁 분석 실패: {coaching_tips.get('error')}")
+        except Exception as e:
+            logger.error(f"코칭 팁 분석 중 오류: {str(e)}")
+        
+        # 감정 해석 분석
+        try:
+            logger.info("감정 해석 분석 시작")
+            sentiment_interpretation = self.ai_analyzer.interpret_sentiment(
+                transcription_result["transcript"], speaker_segments
+            )
+            if sentiment_interpretation.get("success"):
+                self.analysis_manager.update_analysis_result(conversation_id, "sentiment_interpretation", sentiment_interpretation, username)
+                logger.info("감정 해석 분석 완료")
+            else:
+                logger.error(f"감정 해석 분석 실패: {sentiment_interpretation.get('error')}")
+        except Exception as e:
+            logger.error(f"감정 해석 분석 중 오류: {str(e)}")
+        
+        logger.info("추가 분석들 자동 실행 완료")
+
     def _execute_analysis(self, conversation_id: str, analysis_type: str, results: dict):
         """특정 분석 유형을 실행합니다"""
         analysis_name = self.analysis_manager.get_analysis_types()[analysis_type]['name']

@@ -9,6 +9,12 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 import glob
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from src.logging_config import get_logger
+
+# 로거 설정
+logger = get_logger(__name__)
 
 
 class AnalysisManager:
@@ -21,12 +27,16 @@ class AnalysisManager:
         Args:
             results_dir: 분석 결과 저장 디렉터리
         """
+        logger.info("AnalysisManager 초기화 시작")
+        
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"결과 디렉터리 설정: {self.results_dir}")
         
         # 공통 디렉터리 (하위 호환성)
         self.shared_dir = self.results_dir / "shared"
         self.shared_dir.mkdir(exist_ok=True)
+        logger.info(f"공통 디렉터리 설정: {self.shared_dir}")
         
         # 지원하는 분석 유형
         self.analysis_types = {
@@ -56,6 +66,9 @@ class AnalysisManager:
                 "icon": "😊"
             }
         }
+        
+        logger.info(f"분석 유형 {len(self.analysis_types)}개 설정 완료")
+        logger.info("AnalysisManager 초기화 완료")
     
     def create_new_analysis(self, conversation_id: str, transcription_data: Dict[str, Any], 
                           teacher_child_analysis: Dict[str, Any], 
@@ -72,6 +85,9 @@ class AnalysisManager:
         Returns:
             Dict: 생성된 분석 세션 데이터
         """
+        logger.info(f"새 분석 세션 생성 시작: {conversation_id}")
+        logger.info(f"사용자: {username}")
+        
         analysis_data = {
             "conversation_id": conversation_id,
             "created_at": datetime.now().isoformat(),
@@ -99,12 +115,16 @@ class AnalysisManager:
         }
         
         # 초기 데이터 저장
-        self._save_analysis_data(conversation_id, analysis_data)
-        
-        return analysis_data
+        success = self._save_analysis_data(conversation_id, analysis_data)
+        if success:
+            logger.info(f"새 분석 세션 생성 완료: {conversation_id}")
+            return analysis_data
+        else:
+            logger.error(f"새 분석 세션 저장 실패: {conversation_id}")
+            return None
     
     def update_analysis_result(self, conversation_id: str, analysis_type: str, 
-                             result: Dict[str, Any]) -> bool:
+                             result: Dict[str, Any], username: str = None) -> bool:
         """
         특정 분석 유형의 결과를 업데이트합니다.
         
@@ -112,14 +132,18 @@ class AnalysisManager:
             conversation_id: 대화 ID
             analysis_type: 분석 유형 ('comprehensive', 'quick_feedback' 등)
             result: 분석 결과
+            username: 사용자명 (선택사항)
             
         Returns:
             bool: 업데이트 성공 여부
         """
+        logger.info(f"분석 결과 업데이트 시작: {conversation_id} - {analysis_type}")
+        
         try:
             # 기존 데이터 로드
-            analysis_data = self.load_analysis(conversation_id)
+            analysis_data = self.load_analysis(conversation_id, username)
             if not analysis_data:
+                logger.error(f"분석 데이터를 찾을 수 없음: {conversation_id}")
                 return False
             
             # 분석 결과 업데이트
@@ -127,11 +151,20 @@ class AnalysisManager:
             analysis_data["analysis_status"][analysis_type] = result.get("success", False)
             analysis_data["last_updated"] = datetime.now().isoformat()
             
+            logger.info(f"분석 결과 업데이트 완료: {analysis_type} - 성공: {result.get('success', False)}")
+            
             # 저장
-            return self._save_analysis_data(conversation_id, analysis_data)
+            success = self._save_analysis_data(conversation_id, analysis_data)
+            if success:
+                logger.info(f"분석 결과 저장 완료: {conversation_id}")
+            else:
+                logger.error(f"분석 결과 저장 실패: {conversation_id}")
+            
+            return success
             
         except Exception as e:
-            print(f"분석 결과 업데이트 실패: {e}")
+            logger.error(f"분석 결과 업데이트 실패: {e}")
+            logger.exception("상세 오류 정보:")
             return False
     
     def load_analysis(self, conversation_id: str, username: str = None) -> Optional[Dict[str, Any]]:
@@ -148,22 +181,33 @@ class AnalysisManager:
         # 사용자별 디렉터리에서 먼저 찾기
         if username:
             user_file_path = self.results_dir / username / f"{conversation_id}.json"
+            logger.info(f"사용자별 파일 경로 확인: {user_file_path}")
             if user_file_path.exists():
                 try:
                     with open(user_file_path, 'r', encoding='utf-8') as f:
-                        return json.load(f)
+                        data = json.load(f)
+                        logger.info(f"사용자별 분석 데이터 로드 성공: {conversation_id}")
+                        return data
                 except Exception as e:
-                    print(f"분석 데이터 로드 실패: {e}")
+                    logger.error(f"사용자별 분석 데이터 로드 실패: {e}")
+            else:
+                logger.warning(f"사용자별 파일이 존재하지 않음: {user_file_path}")
         
         # 기본 디렉터리에서 찾기 (하위 호환성)
         default_file_path = self.results_dir / f"{conversation_id}.json"
+        logger.info(f"기본 파일 경로 확인: {default_file_path}")
         if default_file_path.exists():
             try:
                 with open(default_file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    logger.info(f"기본 분석 데이터 로드 성공: {conversation_id}")
+                    return data
             except Exception as e:
-                print(f"분석 데이터 로드 실패: {e}")
+                logger.error(f"기본 분석 데이터 로드 실패: {e}")
+        else:
+            logger.warning(f"기본 파일이 존재하지 않음: {default_file_path}")
         
+        logger.error(f"분석 데이터를 찾을 수 없음: {conversation_id}")
         return None
     
     def get_analysis_result(self, conversation_id: str, analysis_type: str, username: str = None) -> Optional[Dict[str, Any]]:
@@ -358,22 +402,28 @@ class AnalysisManager:
     
     def _save_analysis_data(self, conversation_id: str, data: Dict[str, Any]) -> bool:
         """분석 데이터를 파일에 저장합니다."""
+        logger.info(f"분석 데이터 저장 시작: {conversation_id}")
+        
         # 사용자별 디렉터리 구조 생성
         username = data.get('username')
         if username:
             user_dir = self.results_dir / username
             user_dir.mkdir(exist_ok=True)
             file_path = user_dir / f"{conversation_id}.json"
+            logger.info(f"사용자별 디렉터리 사용: {user_dir}")
         else:
             # 사용자가 없는 경우 기본 디렉터리 사용 (하위 호환성)
             file_path = self.results_dir / f"{conversation_id}.json"
+            logger.info(f"기본 디렉터리 사용: {self.results_dir}")
         
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info(f"분석 데이터 저장 완료: {file_path}")
             return True
         except Exception as e:
-            print(f"분석 데이터 저장 실패: {e}")
+            logger.error(f"분석 데이터 저장 실패: {e}")
+            logger.exception("상세 오류 정보:")
             return False
     
     def _get_transcript_preview(self, data: Dict[str, Any], max_length: int = 100) -> str:

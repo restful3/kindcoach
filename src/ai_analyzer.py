@@ -11,18 +11,41 @@ from datetime import datetime
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.prompt_manager import PromptManager
+from src.logging_config import get_logger, log_performance, log_api_call
+
+# 로거 설정
+logger = get_logger(__name__)
 
 
 class AIAnalyzer:
     def __init__(self, api_key: str = None):
         """OpenAI API 키로 초기화"""
+        logger.info("AIAnalyzer 초기화 시작")
+        
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
+            logger.error("OPENAI_API_KEY가 설정되지 않았습니다.")
             raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다.")
         
-        self.client = openai.OpenAI(api_key=self.api_key)
-        self.model = "gpt-4o-mini"
-        self.prompt_manager = PromptManager()
+        logger.info(f"OpenAI API 키 확인됨 (길이: {len(self.api_key)}자)")
+        
+        try:
+            self.client = openai.OpenAI(api_key=self.api_key)
+            self.model = "gpt-4o-mini"
+            logger.info(f"OpenAI 클라이언트 초기화 완료 (모델: {self.model})")
+        except Exception as e:
+            logger.error(f"OpenAI 클라이언트 초기화 실패: {str(e)}")
+            raise
+        
+        try:
+            self.prompt_manager = PromptManager()
+            prompts = self.prompt_manager.get_all_prompts()
+            logger.info(f"PromptManager 초기화 완료 (프롬프트 {len(prompts)}개 로드됨)")
+        except Exception as e:
+            logger.error(f"PromptManager 초기화 실패: {str(e)}")
+            raise
+        
+        logger.info("AIAnalyzer 초기화 완료")
     
     def analyze_conversation(
         self, 
@@ -43,8 +66,14 @@ class AIAnalyzer:
         Returns:
             Dict: 분석 결과와 코칭 피드백
         """
+        logger.info("종합 대화 분석 시작")
+        logger.info(f"전사본 길이: {len(transcript)}자")
+        logger.info(f"화자 구간 수: {len(speaker_segments)}개")
+        logger.info(f"교사-아동 정보: {teacher_child_info.get('is_teacher_child', False)}")
+        
         try:
             # 교사와 아동 정보 준비
+            logger.info("화자 정보 포맷팅 중...")
             teacher_info = self._format_speaker_info(
                 teacher_child_info.get("teacher_stats", {}), 
                 "교사"
@@ -53,23 +82,33 @@ class AIAnalyzer:
                 teacher_child_info.get("child_stats", {}), 
                 "아동"
             )
+            logger.info(f"교사 정보 길이: {len(teacher_info)}자")
+            logger.info(f"아동 정보 길이: {len(child_info)}자")
             
             # 감정 분석 정보 포맷
             sentiment_analysis = self._format_sentiment_data(sentiment_data)
+            logger.info(f"감정 분석 데이터: {len(sentiment_analysis)}자")
             
             # 프롬프트 구성
+            logger.info("프롬프트 템플릿 로드 중...")
             prompt_template = self.prompt_manager.get_prompt("conversation_analysis")
             if not prompt_template:
+                logger.error("종합 분석 프롬프트를 찾을 수 없습니다.")
                 raise ValueError("종합 분석 프롬프트를 찾을 수 없습니다.")
             
+            logger.info("프롬프트 구성 중...")
             prompt = prompt_template.format(
                 transcript=transcript,
                 teacher_info=teacher_info,
                 child_info=child_info,
                 sentiment_analysis=sentiment_analysis
             )
+            logger.info(f"최종 프롬프트 길이: {len(prompt)}자")
             
             # GPT-4o-mini 분석 요청
+            logger.info("OpenAI API 호출 시작...")
+            start_time = datetime.now()
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -80,14 +119,34 @@ class AIAnalyzer:
                 max_tokens=2000
             )
             
-            analysis_result = response.choices[0].message.content
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
             
-            return {
+            # API 호출 로그
+            log_api_call(
+                service="OpenAI",
+                endpoint="chat/completions",
+                duration=processing_time,
+                status="success",
+                model=self.model,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens
+            )
+            
+            logger.info(f"OpenAI API 응답 완료 (처리 시간: {processing_time:.2f}초)")
+            logger.info(f"토큰 사용량 - 프롬프트: {response.usage.prompt_tokens}, 완성: {response.usage.completion_tokens}, 총합: {response.usage.total_tokens}")
+            
+            analysis_result = response.choices[0].message.content
+            logger.info(f"분석 결과 길이: {len(analysis_result)}자")
+            
+            result = {
                 "success": True,
                 "analysis": analysis_result,
                 "analysis_type": "comprehensive",
                 "processed_at": datetime.now().isoformat(),
                 "model_used": self.model,
+                "processing_time_seconds": processing_time,
                 "token_usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
@@ -95,13 +154,19 @@ class AIAnalyzer:
                 }
             }
             
+            logger.info("종합 대화 분석 완료")
+            return result
+            
         except openai.APIError as e:
+            logger.error(f"OpenAI API 호출 실패 (종합 분석): {str(e)}")
             return {
                 "success": False,
                 "error": f"OpenAI API 호출 실패 (종합 분석): {str(e)}",
                 "analysis": None
             }
         except Exception as e:
+            logger.error(f"AI 분석 중 오류 발생: {str(e)}")
+            logger.exception("상세 오류 정보:")
             return {
                 "success": False,
                 "error": f"AI 분석 중 오류 발생: {str(e)}",
@@ -118,12 +183,20 @@ class AIAnalyzer:
         Returns:
             Dict: 간단한 피드백 결과
         """
+        logger.info("빠른 피드백 분석 시작")
+        logger.info(f"전사본 길이: {len(transcript)}자")
+        
         try:
             prompt_template = self.prompt_manager.get_prompt("quick_feedback")
             if not prompt_template:
+                logger.error("빠른 피드백 프롬프트를 찾을 수 없습니다.")
                 raise ValueError("빠른 피드백 프롬프트를 찾을 수 없습니다.")
             
             prompt = prompt_template.format(transcript=transcript)
+            logger.info(f"빠른 피드백 프롬프트 길이: {len(prompt)}자")
+            
+            logger.info("OpenAI API 호출 시작 (빠른 피드백)...")
+            start_time = datetime.now()
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -135,22 +208,54 @@ class AIAnalyzer:
                 max_tokens=800
             )
             
-            feedback = response.choices[0].message.content
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
             
-            return {
+            # API 호출 로그
+            log_api_call(
+                service="OpenAI",
+                endpoint="chat/completions",
+                duration=processing_time,
+                status="success",
+                model=self.model,
+                analysis_type="quick_feedback",
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens
+            )
+            
+            logger.info(f"빠른 피드백 API 응답 완료 (처리 시간: {processing_time:.2f}초)")
+            logger.info(f"토큰 사용량: {response.usage.total_tokens}개")
+            
+            feedback = response.choices[0].message.content
+            logger.info(f"피드백 결과 길이: {len(feedback)}자")
+            
+            result = {
                 "success": True,
                 "feedback": feedback,
                 "feedback_type": "quick",
-                "processed_at": datetime.now().isoformat()
+                "processed_at": datetime.now().isoformat(),
+                "processing_time_seconds": processing_time,
+                "token_usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                }
             }
             
+            logger.info("빠른 피드백 분석 완료")
+            return result
+            
         except openai.APIError as e:
+            logger.error(f"OpenAI API 호출 실패 (빠른 피드백): {str(e)}")
             return {
                 "success": False,
                 "error": f"OpenAI API 호출 실패 (빠른 피드백): {str(e)}",
                 "feedback": None
             }
         except Exception as e:
+            logger.error(f"빠른 피드백 생성 중 오류 발생: {str(e)}")
+            logger.exception("상세 오류 정보:")
             return {
                 "success": False,
                 "error": f"빠른 피드백 생성 중 오류 발생: {str(e)}",

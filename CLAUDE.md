@@ -83,15 +83,23 @@ The application follows a single-page Streamlit architecture with modular backen
 - **`src/ai_analyzer.py`**: OpenAI client for multiple analysis types (comprehensive, quick feedback, child development, coaching tips)  
 - **`src/utils.py`**: Shared utilities for environment loading, file validation, data formatting, and UI helpers
 - **`src/auth.py`**: Authentication system with bcrypt password hashing and session management
-- **`config/prompts.py`**: Centralized AI prompt templates for consistent analysis quality
+- **`src/prompt_manager.py`**: Dynamic prompt management system for domain experts to modify AI prompts
+- **`src/prompt_editor.py`**: Streamlit UI components for prompt editing and management
+- **`src/analysis_manager.py`**: Comprehensive analysis result storage, loading, and management system
+- **`src/metadata_form.py`**: UI components for collecting structured metadata during analysis requests
+- **`src/dashboard.py`**: Personal dashboard with user-specific analysis statistics and insights
+- **`config/prompts.py`**: Legacy centralized AI prompt templates (being migrated to JSON-based system)
+- **`config/prompts.json`**: JSON-based prompt template system with versioning and backup support
 
 ### Data Flow
 1. **Authentication** → Login validation with bcrypt → Session state management → Auto-logout after 30 mins
-2. **File Upload** → Validation (format, size) → Store in session state
-3. **Audio Processing** → AssemblyAI transcription → Speaker diarization → Teacher/child role detection
-4. **AI Analysis** → Multiple OpenAI calls with specialized prompts → Structured JSON responses  
-5. **Results Display** → Tabbed interface with summary, transcript, analysis, and visualizations
-6. **Persistence** → Analysis results auto-saved to `data/analysis_results/` as JSON with unique conversation IDs
+2. **Metadata Collection** → Structured input form for child/teacher information → Session state storage
+3. **File Upload** → Validation (format, size) → Store in session state
+4. **Audio Processing** → AssemblyAI transcription → Speaker diarization → Teacher/child role detection
+5. **AI Analysis** → Multiple OpenAI calls with dynamic prompts from JSON templates → Structured JSON responses  
+6. **Results Display** → Tabbed interface with summary, transcript, analysis, and visualizations
+7. **Persistence** → Analysis results auto-saved to user-specific directories in `data/analysis_results/` as JSON with unique conversation IDs
+8. **Dashboard Analytics** → Personal statistics and insights based on historical analysis data
 
 ### Speaker Analysis Logic
 - Identifies teacher vs child based on speaking time ratios, word counts, and conversation patterns
@@ -103,6 +111,15 @@ The application follows a single-page Streamlit architecture with modular backen
 - **Quick Feedback**: Immediate insights for rapid review
 - **Child Development**: Developmental psychology perspective  
 - **Coaching Tips**: Situational improvement recommendations
+
+### Prompt Management System
+The application features a dynamic prompt management system allowing domain experts to modify AI analysis prompts:
+
+- **JSON-based Templates**: Prompts stored in `config/prompts.json` with metadata and versioning
+- **Live Editing**: Web-based prompt editor accessible through the admin interface
+- **Backup System**: Automatic versioning with timestamps in `config/backups/`
+- **Template Variables**: Support for dynamic content insertion (transcript, metadata, etc.)
+- **Hot Reloading**: Changes take effect immediately without application restart
 
 ## Development Notes
 
@@ -121,6 +138,9 @@ Session state keys used throughout the application:
 - `analysis_results`: All AI analysis responses
 - `conversation_id`: Unique identifier for saving results
 - `show_additional_analysis`: UI state for expanded analysis options
+- `prompt_manager`: PromptManager instance for dynamic prompt access
+- `analysis_metadata`: Structured metadata collected from user input forms
+- `current_username`: Active user for personalized data storage and dashboard
 
 ### Error Handling Patterns
 - API failures gracefully handled with user-friendly error messages
@@ -134,12 +154,20 @@ Session state keys used throughout the application:
 - Optimized font sizes and button spacing
 - Progress indicators for long-running operations
 
+### Data Storage Architecture
+- **User-specific Storage**: Analysis results stored in `data/analysis_results/{username}/` directories
+- **Shared Results**: Legacy results in `data/analysis_results/` for backward compatibility  
+- **Prompt Versioning**: Automated backups in `config/backups/` with timestamps
+- **Structured Metadata**: Rich metadata collection including child/teacher information, session context
+- **JSON Format**: All data persisted as JSON with unique conversation IDs for easy access
+
 ### Production Readiness
 - Environment variables required for API keys and authentication
 - Results automatically persist to local JSON files with unique IDs
 - No database dependencies - uses file system for simplicity
 - Secure authentication with bcrypt password hashing
 - Session timeout for security (30 minutes)
+- User-specific data isolation for multi-user deployments
 - Ready for deployment with proper API key and admin credential configuration
 
 ## Security Considerations
